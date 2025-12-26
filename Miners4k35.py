@@ -89,7 +89,7 @@ while running: # main loop
     goldCurrent = [platformLevel,borderSize+platformWidth//2]
     runningRound = True
     goldTarget = 200
-    numberOfMiners = 100
+    numberOfMiners = 10000
     
     
     
