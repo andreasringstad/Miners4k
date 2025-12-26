@@ -13,8 +13,8 @@ M_ALIVE, M_Y, M_X, M_STATE, M_FACING, M_GOLD, M_ANIM, M_ANIM_DIR = range(8)
 
 # Initialize Pygame
 pygame.init()
-pygame.display.set_caption("Miners4K - Zoomable Viewport")
-SCREEN_WIDTH, SCREEN_HEIGHT = 800, 600 # Larger window than the map
+pygame.display.set_caption("Miners4K - Fixed Camera & World Clamping")
+SCREEN_WIDTH, SCREEN_HEIGHT = 1344, 756
 myDisplay = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 clock = pygame.time.Clock()
 myfont = pygame.font.SysFont('Arial', 20)
@@ -79,23 +79,33 @@ while running:
     logic_tick_counter = 0
     anim_timer = 0
     
-    # Zoom & Camera State
-    zoom = 1.0
+    zoom = 1.5
     cam_x, cam_y = 0, 0
     prev_mouse_pos = (0, 0)
     
     runningRound = True
     while runningRound:
-        # 1. INPUT & ZOOM HANDLING
         mouse_pos = pygame.mouse.get_pos()
+        
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 runningRound, running = False, False
             if event.type == pygame.MOUSEWHEEL:
-                if event.y > 0: zoom = min(zoom + 0.5, 5.0)
-                if event.y < 0: zoom = max(zoom - 0.5, 1.0)
+                # Zoom centered on mouse
+                old_zoom = zoom
+                zoom = max(1.5, min(zoom + event.y * 0.2, 5.0))
+                # Adjust camera to keep mouse over same world spot
+                cam_x += (mouse_pos[0] / old_zoom) - (mouse_pos[0] / zoom)
+                cam_y += (mouse_pos[1] / old_zoom) - (mouse_pos[1] / zoom)
 
-        # Convert Screen Mouse to World Coordinates
+        # 1. CAMERA CLAMPING
+        # Prevents scrolling past the world boundaries
+        max_cam_x = max(0, WORLD_WIDTH - (SCREEN_WIDTH / zoom))
+        max_cam_y = max(0, WORLD_HEIGHT - (SCREEN_HEIGHT / zoom))
+        cam_x = max(0, min(cam_x, max_cam_x))
+        cam_y = max(0, min(cam_y, max_cam_y))
+
+        # Coordinate Conversion (Now with clamping protection)
         world_mx = int((mouse_pos[0] / zoom) + cam_x)
         world_my = int((mouse_pos[1] / zoom) + cam_y)
         prev_world_mx = int((prev_mouse_pos[0] / zoom) + cam_x)
@@ -111,14 +121,12 @@ while running:
                 iy = prev_world_my + int(i * dy / dist) if dist > 0 else world_my
                 apply_brush(ix, iy, level, world, mode)
         
-        # Camera Pan (Middle click or right click + ctrl, etc)
         if mouse_btns[1]:
             cam_x -= (mouse_pos[0] - prev_mouse_pos[0]) / zoom
             cam_y -= (mouse_pos[1] - prev_mouse_pos[1]) / zoom
 
-        # 2. LOGIC (35 FPS)
-        is_logic_frame = (logic_tick_counter % LOGIC_DIVIDER == 0)
-        if is_logic_frame:
+        # --- LOGIC (35 FPS) ---
+        if logic_tick_counter % LOGIC_DIVIDER == 0:
             anim_timer = (anim_timer + 1) % 4
             if numberOfMiners > 0 and anim_timer == 0:
                 miners.append([1, -10, random.randint(20, 80), 1, 1, 0, 0, 1])
@@ -127,10 +135,11 @@ while running:
             for m in miners:
                 if not m[M_ALIVE]: continue
                 mx, my, facing = m[M_X], m[M_Y], m[M_FACING]
+                cx, cy = mx + 2, my + 10
 
-                # Diameter 7 Pickup
+                # Gold Pickup (Simplified for Logic)
                 if not m[M_GOLD]:
-                    cx, cy, found_gold = mx + 2, my + 10, False
+                    found_gold = False
                     for ry in range(-3, 4):
                         for rx in range(-3, 4):
                             tx, ty = cx + rx, cy + ry
@@ -143,25 +152,32 @@ while running:
                 elif my < 160 and (mx < 110 or mx > 530):
                     m[M_GOLD], goldScore = 0, goldScore + 1
 
-                # Physics
+                # Physics & Collision
                 try:
                     if m[M_STATE] == 1:
-                        if level[my + 11][mx + 2][0] != 0: m[M_STATE] = 0
+                        if level[cy + 1][cx][0] != 0: m[M_STATE] = 0
                         else: m[M_Y] += 1
                     elif m[M_STATE] == 0:
-                        if level[my+10][mx+2+facing][0] == 0: m[M_X] += facing
-                        elif level[my+9][mx+2+facing][0] == 0: m[M_X], m[M_Y] = mx+facing, my-1
+                        if level[cy][cx + facing][0] == 0: m[M_X] += facing
+                        elif level[cy - 1][cx + facing][0] == 0: m[M_X], m[M_Y] = mx+facing, my-1
                         else:
                             m[M_FACING] *= -1
                             if random.random() < 0.2: m[M_STATE] = 18
-                        if level[my+11][mx+2][0] == 0:
+                        if level[cy + 1][cx][0] == 0:
                             if random.random() < 0.5: m[M_STATE] = 18
                             else: m[M_STATE] = 1
-                    else:
-                        if m[M_STATE] > 10: m[M_Y], m[M_X] = my-1, mx+facing
-                        elif m[M_STATE] > 6: m[M_X] += facing
-                        else: m[M_Y], m[M_X] = my+1, mx+facing
-                        m[M_STATE] -= 1
+                    else: # Jumping
+                        nx, ny = mx, my
+                        if m[M_STATE] > 10: ny, nx = my - 1, mx + facing
+                        elif m[M_STATE] > 6: nx = mx + facing
+                        else: ny, nx = my + 1, mx + facing
+
+                        if 0 <= ny < WORLD_HEIGHT - 11 and 0 <= nx < WORLD_WIDTH - 5:
+                            if level[ny + 10][nx + 2][0] == 0:
+                                m[M_X], m[M_Y] = nx, ny
+                                m[M_STATE] -= 1
+                            else: m[M_STATE] = 1
+                        else: m[M_STATE] = 1
                         if m[M_STATE] < 2: m[M_STATE] = 1
                 except IndexError: m[M_ALIVE] = 0
 
@@ -169,28 +185,34 @@ while running:
                     m[M_ANIM] += m[M_ANIM_DIR]
                     if m[M_ANIM] >= 4 or m[M_ANIM] <= 0: m[M_ANIM_DIR] *= -1
 
-        # 3. DRAWING & ZOOMING
-        myDisplay.fill((30, 30, 30)) # Clear background
+        # --- DRAWING ---
+        myDisplay.fill((20, 20, 20))
         
-        # Scale the world surface to match zoom
-        scaled_world = pygame.transform.scale(world, (int(WORLD_WIDTH * zoom), int(WORLD_HEIGHT * zoom)))
-        myDisplay.blit(scaled_world, (-cam_x * zoom, -cam_y * zoom))
+        # Determine what part of the world to show
+        view_rect = pygame.Rect(int(cam_x), int(cam_y), int(SCREEN_WIDTH / zoom), int(SCREEN_HEIGHT / zoom))
+        world_clip = view_rect.clip(world.get_rect())
+        
+        if world_clip.width > 0 and world_clip.height > 0:
+            sub_world = world.subsurface(world_clip)
+            scaled_world = pygame.transform.scale(sub_world, (int(world_clip.width * zoom), int(world_clip.height * zoom)))
+            # Offset the world blit if the camera is viewing "empty space" (though clamped now)
+            blit_x = (world_clip.x - cam_x) * zoom
+            blit_y = (world_clip.y - cam_y) * zoom
+            myDisplay.blit(scaled_world, (blit_x, blit_y))
 
-        # Scale and draw miners
+        # Miner Drawing with same offset logic
         for m in miners:
             if not m[M_ALIVE]: continue
-            # Frustum Culling: Only draw if on screen
-            screen_mx = (m[M_X] - cam_x) * zoom
-            screen_my = (m[M_Y] - cam_y) * zoom
-            if -50 < screen_mx < SCREEN_WIDTH and -50 < screen_my < SCREEN_HEIGHT:
-                s_idx = (2 if m[M_STATE] > 1 else m[M_ANIM]) + (5 if m[M_GOLD] else 0) + (10 if m[M_FACING] == -1 else 0)
-                # Scale the specific sprite
-                s = minerSprites[s_idx]
+            smx = (m[M_X] - cam_x) * zoom
+            smy = (m[M_Y] - cam_y) * zoom
+            if -10 < smx < SCREEN_WIDTH and -10 < smy < SCREEN_HEIGHT:
+                idx = (2 if m[M_STATE] > 1 else m[M_ANIM]) + (5 if m[M_GOLD] else 0) + (10 if m[M_FACING] == -1 else 0)
+                s = minerSprites[idx]
                 scaled_s = pygame.transform.scale(s, (int(5 * zoom), int(11 * zoom)))
-                myDisplay.blit(scaled_s, (screen_mx, screen_my))
+                myDisplay.blit(scaled_s, (smx, smy))
 
         prev_mouse_pos = mouse_pos
-        score_txt = myfont.render(f"Gold: {goldScore} | Zoom: {zoom}x | Middle-Click to Pan", True, (255, 255, 255))
+        score_txt = myfont.render(f"Gold: {goldScore} | Zoom: {zoom:.1f}x | Cam: {int(cam_x)},{int(cam_y)}", True, (255, 255, 255))
         myDisplay.blit(score_txt, (15, 10))
         pygame.display.flip()
         logic_tick_counter += 1
